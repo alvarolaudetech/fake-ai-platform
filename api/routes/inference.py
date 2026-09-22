@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from api.services.auth_service import get_current_user
 from api.services.llm_service import ChatMessage, LLMServiceError, get_llm_service
+from api.services.quota_service import QuotaService
 from core.config import get_settings
-from core.database import InferenceLog, ModelConfig, UsageQuota, User, get_db
+from core.database import ModelConfig, User, get_db
 
 router = APIRouter(prefix="/inference", tags=["inference"])
 settings = get_settings()
@@ -55,54 +56,7 @@ def _get_active_model(db: Session, model_slug: str) -> ModelConfig:
     return model
 
 
-def _enforce_quota(db: Session, user: User, estimated_tokens: int) -> UsageQuota:
-    quota = db.query(UsageQuota).filter(UsageQuota.user_id == user.id).first()
-    if quota is None:
-        quota = UsageQuota(user_id=user.id, daily_token_limit=settings.default_daily_token_quota)
-        db.add(quota)
-        db.commit()
-        db.refresh(quota)
-
-    if datetime.now(timezone.utc) - quota.reset_at > timedelta(days=1):
-        quota.tokens_used_today = 0
-        quota.reset_at = datetime.now(timezone.utc)
-        db.commit()
-
-    if quota.tokens_used_today + estimated_tokens > quota.daily_token_limit:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Daily token quota exceeded",
-        )
-    return quota
-
-
-def _record_usage(db: Session, quota: UsageQuota, tokens_used: int) -> None:
-    quota.tokens_used_today += tokens_used
-    db.commit()
-
-
-def _log_inference(
-    db: Session,
-    user: User,
-    model_slug: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    latency_ms: int,
-    status_code: int,
-    error_message: str | None = None,
-) -> None:
-    db.add(
-        InferenceLog(
-            user_id=user.id,
-            model_slug=model_slug,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            latency_ms=latency_ms,
-            status_code=status_code,
-            error_message=error_message,
-        )
-    )
-    db.commit()
+# (Nothing here, these functions were removed)
 
 
 @router.post("/chat", response_model=ChatCompletionResponse)
@@ -113,10 +67,11 @@ def chat_completion(
 ):
     model = _get_active_model(db, payload.model)
     llm_service = get_llm_service()
+    quota_service = QuotaService(db)
     messages = [ChatMessage(role=m.role, content=m.content) for m in payload.messages]
 
     estimated_prompt_tokens = sum(llm_service.count_tokens(m.content) for m in messages)
-    quota = _enforce_quota(db, current_user, estimated_prompt_tokens + (payload.max_tokens or model.max_output_tokens))
+    quota = quota_service.enforce_quota(current_user, estimated_prompt_tokens + (payload.max_tokens or model.max_output_tokens))
 
     try:
         result = llm_service.complete(
@@ -126,13 +81,12 @@ def chat_completion(
             max_tokens=payload.max_tokens,
         )
     except LLMServiceError as exc:
-        _log_inference(db, current_user, model.model_slug, estimated_prompt_tokens, 0, 0, 502, str(exc))
+        quota_service.log_inference(current_user, model.model_slug, estimated_prompt_tokens, 0, 0, 502, str(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     total_tokens = result.prompt_tokens + result.completion_tokens
-    _record_usage(db, quota, total_tokens)
-    _log_inference(
-        db,
+    quota_service.record_usage(quota, total_tokens)
+    quota_service.log_inference(
         current_user,
         model.model_slug,
         result.prompt_tokens,
@@ -167,10 +121,11 @@ async def chat_completion_stream(
         )
 
     llm_service = get_llm_service()
+    quota_service = QuotaService(db)
     messages = [ChatMessage(role=m.role, content=m.content) for m in payload.messages]
 
     estimated_prompt_tokens = sum(llm_service.count_tokens(m.content) for m in messages)
-    quota = _enforce_quota(db, current_user, estimated_prompt_tokens + (payload.max_tokens or model.max_output_tokens))
+    quota = quota_service.enforce_quota(current_user, estimated_prompt_tokens + (payload.max_tokens or model.max_output_tokens))
 
     async def event_generator():
         collected_chunks: list[str] = []
@@ -188,9 +143,9 @@ async def chat_completion_stream(
             return
         finally:
             completion_tokens = llm_service.count_tokens("".join(collected_chunks))
-            _record_usage(db, quota, estimated_prompt_tokens + completion_tokens)
-            _log_inference(
-                db, current_user, model.model_slug, estimated_prompt_tokens, completion_tokens, 0, 200
+            quota_service.record_usage(quota, estimated_prompt_tokens + completion_tokens)
+            quota_service.log_inference(
+                current_user, model.model_slug, estimated_prompt_tokens, completion_tokens, 0, 200
             )
         yield "event: done\ndata: [DONE]\n\n"
 
