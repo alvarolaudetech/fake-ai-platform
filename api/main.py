@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import Counter, Histogram, make_asgi_app
 
-from api.routes import inference, models
+from api.routes import inference, models, api_keys
 from core.config import get_settings
 from core.database import init_db
 
@@ -75,6 +75,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 app.include_router(models.router, prefix=settings.api_v1_prefix)
 app.include_router(inference.router, prefix=settings.api_v1_prefix)
+app.include_router(api_keys.router, prefix=settings.api_v1_prefix)
 
 if settings.enable_prometheus:
     app.mount("/metrics", make_asgi_app())

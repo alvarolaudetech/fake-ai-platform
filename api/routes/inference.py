@@ -142,11 +142,17 @@ async def chat_completion_stream(
             yield f"event: error\ndata: {exc}\n\n"
             return
         finally:
-            completion_tokens = llm_service.count_tokens("".join(collected_chunks))
-            quota_service.record_usage(quota, estimated_prompt_tokens + completion_tokens)
-            quota_service.log_inference(
-                current_user, model.model_slug, estimated_prompt_tokens, completion_tokens, 0, 200
-            )
+            # Use a new DB session for final logging as the request session may be closed/invalidated during streaming
+            from core.database import get_db, UsageQuota
+            with next(get_db()) as db_session:
+                quota_service_final = QuotaService(db_session)
+                completion_tokens = llm_service.count_tokens("".join(collected_chunks))
+                user_quota = db_session.query(UsageQuota).filter(UsageQuota.user_id == current_user.id).first()
+                if user_quota:
+                    quota_service_final.record_usage(user_quota, estimated_prompt_tokens + completion_tokens)
+                quota_service_final.log_inference(
+                    current_user, model.model_slug, estimated_prompt_tokens, completion_tokens, 0, 200
+                )
         yield "event: done\ndata: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

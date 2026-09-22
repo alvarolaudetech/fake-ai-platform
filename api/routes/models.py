@@ -20,8 +20,8 @@ class ModelConfigCreate(BaseModel):
     upstream_model_name: str
     context_window: int = 8192
     max_output_tokens: int = 1024
-    input_cost_per_1k: float = 0.0
-    output_cost_per_1k: float = 0.0
+    input_cost_per_1M: float = 0.0
+    output_cost_per_1M: float = 0.0
     supports_streaming: bool = True
     system_prompt_override: str | None = None
 
@@ -29,8 +29,8 @@ class ModelConfigCreate(BaseModel):
 class ModelConfigUpdate(BaseModel):
     display_name: str | None = None
     max_output_tokens: int | None = None
-    input_cost_per_1k: float | None = None
-    output_cost_per_1k: float | None = None
+    input_cost_per_1M: float | None = None
+    output_cost_per_1M: float | None = None
     is_active: bool | None = None
     supports_streaming: bool | None = None
     system_prompt_override: str | None = None
@@ -44,8 +44,8 @@ class ModelConfigOut(BaseModel):
     upstream_model_name: str
     context_window: int
     max_output_tokens: int
-    input_cost_per_1k: float
-    output_cost_per_1k: float
+    input_cost_per_1M: float
+    output_cost_per_1M: float
     is_active: bool
     supports_streaming: bool
 

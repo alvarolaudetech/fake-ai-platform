@@ -67,8 +67,8 @@ class LLMService:
         return len(self._encoding.encode(text))
 
     def estimate_cost_usd(self, model: ModelConfig, prompt_tokens: int, completion_tokens: int) -> float:
-        input_cost = (prompt_tokens / 1000) * float(model.input_cost_per_1k)
-        output_cost = (completion_tokens / 1000) * float(model.output_cost_per_1k)
+        input_cost = (prompt_tokens / 1_000_000) * float(model.input_cost_per_1M)
+        output_cost = (completion_tokens / 1_000_000) * float(model.output_cost_per_1M)
         return round(input_cost + output_cost, 6)
 
     @retry(
